@@ -1,4 +1,4 @@
-#!/usr/bin/env ipython3
+#!/usr/bin/env python3
 """ author: Jianqi Chen """
 import sys, svgwrite, random, copy, numpy
 from SlicingTree import STree
