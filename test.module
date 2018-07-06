@@ -1,0 +1,10 @@
+# module file, use python syntax
+# 'module name':( {'resource name 1': number, 'resource name 2': number ...}, power(mW) )
+
+module_list = {
+    'jpeg':   ({'LAB':4, 'RAM':1, 'DSP':1},0),
+    'fir':    ({'LAB':2, 'RAM':0, 'DSP':0},0),
+    'sobel':  ({'LAB':2, 'RAM':1, 'DSP':0},0),
+    'interp': ({'LAB':2, 'RAM':0, 'DSP':1},0),
+    'aes':    ({'LAB':4, 'RAM':0, 'DSP':0},0)
+}
