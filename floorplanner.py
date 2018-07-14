@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """ author: Jianqi Chen """
-import sys, os, svgwrite, random, copy, numpy, getopt
+import sys, os, svgwrite, random, copy, numpy, getopt, re
 from SlicingTree import STree
 
 s_floorplan = None # the slicing tree, just remember it's a global variable
@@ -21,9 +21,8 @@ def main():
     DrawFloorplan('./output_files/empty_floorplan.svg',[])
 #    mod_loc_list = FloorplaningSA()
     mod_loc_list = [('aes', (1, 0, 2, 2)), ('jpeg', (3, 0, 4, 4)), ('fir', (1, 4, 2, 2)), ('interp', (3, 4, 2, 2)), ('sobel', (5, 4, 2, 2))]
-    FLPgen(mod_loc_list)
-    PTRACEgen(module_list, 0)
-    os.system('cd hotspot && ./hotspot -c hotspot.config -f '+design_name+'.flp -p '+design_name+'.ptrace -steady_file '+design_name+'.steady -model_type grid -grid_steady_file '+design_name+'.grid.steady')
+    max_temp = RunHotSpot(mod_loc_list, 0)
+    print('max temperature = '+str(max_temp))
 
 # handle command line arguments by setting global variables    
 def SetGlobalVar(argv):
@@ -321,12 +320,20 @@ def PTRACEgen(mod_list, root_power):
     ptrace_file.close()
     
 # generate flp and ptrace file from module_list and IRL. root_power is static power of the whole floorplanning area(unit: mW)
-# run HotSpot and get thermal map file [design_name].grid.steady as output, also return the highest temperature
+# run HotSpot and get thermal map file [design_name].grid.steady as output, also return the highest temperature(unit: Kelvin)
 def RunHotSpot(module_loc_list, root_power):
     FLPgen(module_loc_list)
     PTRACEgen(module_list, root_power)
     
     os.system('cd hotspot && ./hotspot -c hotspot.config -f '+design_name+'.flp -p '+design_name+'.ptrace -steady_file '+design_name+'.steady -model_type grid -grid_steady_file '+design_name+'.grid.steady')
+    
+    thermal_map = open('./hotspot/'+design_name+'.grid.steady','r')
+    temperature_str = re.findall(r'\d{3}\.\d{2}', thermal_map.read() )
+    thermal_map.close()
+    temperature = map(float, temperature_str)
+    max_temp = max(temperature)
+    
+    return max_temp
 
 # floorplanning algorithm based on Simulated Annealing
 def FloorplaningSA():
