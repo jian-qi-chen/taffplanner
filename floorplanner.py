@@ -1,24 +1,55 @@
 #!/usr/bin/env python3
 """ author: Jianqi Chen """
-import sys, svgwrite, random, copy, numpy
+import sys, os, svgwrite, random, copy, numpy, getopt
 from SlicingTree import STree
-
-resource_file = "./test.res"
-module_file = "./test.module"
-exec(open(resource_file).read())
-exec(open(module_file).read())
 
 s_floorplan = None # the slicing tree, just remember it's a global variable
 
 colormap = {'LAB':'blue','RAM':'orange','DSP':'red'}
 asp_max = 4 # maximum aspect ratio for a single module, minimum is 1/asp_max
-alpha = 1.5 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<alpha<=2
+alpha = 1.2 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<alpha<=2
 leaf_IRL = {} #IRL of leaves (functional modules), usually only generate once for given resource/module files
 history_record = {} #stores slicing trees and their cost that are evaluated
 
-def main(argv):
-    FloorplaningSA()
+def usage():
+    print("To run the program for [design_name], [design_name].module and [design_name].res should be provided. Then enter:")
+    print("\t./floorplanner.py [design_name]")
+    print("design_name = 'test' by default")
 
+def main():
+    # Draw empty floorplan
+    DrawFloorplan('./output_files/empty_floorplan.svg',[])
+#    mod_loc_list = FloorplaningSA()
+    mod_loc_list = [('aes', (1, 0, 2, 2)), ('jpeg', (3, 0, 4, 4)), ('fir', (1, 4, 2, 2)), ('interp', (3, 4, 2, 2)), ('sobel', (5, 4, 2, 2))]
+    FLPgen(mod_loc_list)
+    PTRACEgen(module_list, 0)
+    os.system('cd hotspot && ./hotspot -c hotspot.config -f '+design_name+'.flp -p '+design_name+'.ptrace -steady_file '+design_name+'.steady -model_type grid -grid_steady_file '+design_name+'.grid.steady')
+
+# handle command line arguments by setting global variables    
+def SetGlobalVar(argv):
+    global design_name
+    os.system('mkdir -p output_files')
+    
+    try:
+        opts, args = getopt.getopt(argv,'h',['help'])
+    except getopt.GetopError:
+        usage()
+        sys.exit(1)
+        
+    for opt, arg in opts:
+        if opt in ('-h','--help'):
+            usage()
+            sys.exit(0)
+        else:
+            usage()
+            sys.exit(2)
+    
+    if len(args) > 1:
+        usage()
+        sys.exit(2)
+    elif len(args) == 1:
+        design_name = args[0]
+        
 # check whether the cell is inside the rectangle
 # (cx,cy): coordinate of the cell, every cell's (x,y) actually represents 4 cells
 # e.g. cx=1, cy=3, the four cells' location: (1,3),(WIDTH+1,3),(1,HEIGHT+3),(WIDTH+1,HEIGHT+3)
@@ -254,6 +285,49 @@ def EvaluateNode(index):
                 
     s_floorplan.slicing_tree[index].IRL = IRL
 
+# generate floorplan file for thermal simulator HotSpot
+# module_loc_list = [(mod_name1,(x,y,w,h)),(mod_name2..)..]
+def FLPgen(module_loc_list):
+    # how long is 1 unit width in IRLs
+    cell_width = 0.0001
+    cell_height = 0.0001
+    
+    flp_file = open('./hotspot/'+design_name+'.flp','w')
+    flp_file.write('root\t'+str( WIDTH*cell_width )+'\t'+str( HEIGHT*cell_height )+'\t0\t0\n')
+    
+    for mod in module_loc_list:
+        width = str(mod[1][2]*cell_width)
+        height = str(mod[1][3]*cell_height)
+        left_x = str(mod[1][0]*cell_width)
+        bottom_y = str(mod[1][1]*cell_height)
+        flp_file.write(mod[0]+'\t'+width+'\t'+height+'\t'+left_x+'\t'+bottom_y+'\n')
+        
+    flp_file.close()
+
+# generate power trace file for thermal simulator HotSpot
+# mod_list should have the same format of the module_list in file test.module
+def PTRACEgen(mod_list, root_power):
+    ptrace_file = open('./hotspot/'+design_name+'.ptrace','w')
+    
+    name = 'root' #first line
+    power = str(root_power/1000) #second line
+    for mod in mod_list:
+        name += '\t'
+        name += mod
+        power += '\t'
+        power += str( mod_list[mod][1]/1000 ) #unit: Watt
+        
+    ptrace_file.write(name+'\n'+power+'\n')
+    ptrace_file.close()
+    
+# generate flp and ptrace file from module_list and IRL. root_power is static power of the whole floorplanning area(unit: mW)
+# run HotSpot and get thermal map file [design_name].grid.steady as output, also return the highest temperature
+def RunHotSpot(module_loc_list, root_power):
+    FLPgen(module_loc_list)
+    PTRACEgen(module_list, root_power)
+    
+    os.system('cd hotspot && ./hotspot -c hotspot.config -f '+design_name+'.flp -p '+design_name+'.ptrace -steady_file '+design_name+'.steady -model_type grid -grid_steady_file '+design_name+'.grid.steady')
+
 # floorplanning algorithm based on Simulated Annealing
 def FloorplaningSA():
     global s_floorplan
@@ -358,7 +432,9 @@ def FloorplaningSA():
     else:
         print('best floorplan: '+str(best_fp))
         modules = best_fp[1]
-        DrawFloorplan('floorplan.svg',modules)
+        DrawFloorplan('./output_files/'+design_name+'_floorplan.svg',modules)
+        
+    return modules
 
 
 def DrawFloorplan(svg_name, modules):
@@ -413,7 +489,17 @@ def DrawFloorplan(svg_name, modules):
         dr.add(dr.text(mod_name,insert=(initial_x,initial_y+20)))
     
     dr.save()
-        
+
+
+design_name = 'test' #default
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    SetGlobalVar(sys.argv[1:])
+    
+resource_file = "./"+ design_name +".res"
+module_file = "./"+ design_name +".module"
+exec(open(resource_file).read())
+exec(open(module_file).read())
+
+if __name__ == "__main__":
+    main()
