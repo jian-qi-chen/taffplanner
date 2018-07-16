@@ -49,7 +49,7 @@ sub usage () {
 	my $smallest_shown=10000;	#fraction of the entire chip necessary to see macro
 	my $zoom=10**6;
 	my $in_minx=0; my $in_miny=0; my $in_maxx=0; my $in_maxy=0; 
-	my $txt_offset=100;
+	my $txt_offset=50;
 	my $x_bound;
 
 
@@ -189,22 +189,22 @@ if (@ARGV == 6) {
 		if ($w>$tot_x/$smallest_shown && $h>$tot_y/$smallest_shown){
 			$fp.="\t".'<line x1="'.@{$_}[1] .'" y1="'. $start_y .
 			'" x2="'. @{$_}[3] .'" y2="'. $start_y .
-			'" style="stroke:black;stroke-width:30" />'."\n";
+			'" style="stroke:black;stroke-width:10" />'."\n";
 			
 			$fp.="\t".'<line x1="'.@{$_}[1] .'" y1="'. $start_y .
 			'" x2="'. @{$_}[1] .'" y2="'. $end_y .
-			'" style="stroke:black;stroke-width:30" />'."\n";
+			'" style="stroke:black;stroke-width:10" />'."\n";
 			
 			$fp.="\t".'<line x1="'.@{$_}[3] .'" y1="'. $start_y .
 			'" x2="'. @{$_}[3] .'" y2="'. $end_y .
-			'" style="stroke:black;stroke-width:30" />'."\n";
+			'" style="stroke:black;stroke-width:10" />'."\n";
 			
 			$fp.="\t".'<line x1="'.@{$_}[1] .'" y1="'. $end_y .
 			'" x2="'. @{$_}[3] .'" y2="'. $end_y .
-			'" style="stroke:black;stroke-width:30" />'."\n";
+			'" style="stroke:black;stroke-width:10" />'."\n";
 			
 			$fp.="\t".'<text x="'.$txt_start_x .'" y="'. $txt_start_y .
-			'" fill="black" text_anchor="start" style="font-size:180" > '. @{$_}[0] .' </text>'."\n";
+			'" fill="black" text_anchor="start" style="font-size:100" > '. @{$_}[0] .' </text>'."\n";
 		}
 	}
 	}
@@ -233,14 +233,14 @@ if (@ARGV == 6) {
 				$scale_value=($max_t-$min_t)*(1-$i/($num_levels-1))+$min_t;
 				$scale_value=~s/^(\d+)\.(\d)(\d)\d+/$1\.$2$3/;
 				$fp.="\t".'<text x="'.$scale_xmin .'" y="'. $txt_ymin.
-				'" fill="black" text_anchor="start" style="font-size:250" > '. $scale_value .' </text>'."\n";
+				'" fill="black" text_anchor="start" style="font-size:40" > '. $scale_value .' </text>'."\n";
 			}
 		}
 		$clr_ymin+=$h2;
 	}
 	$min_t=~s/^(\d+)\.(\d)(\d)\d+/$1\.$2$3/;
 	$fp.="\t".'<text x="'.$scale_xmin .'" y="'. $clr_ymin .
-	'" fill="black" text_anchor="start" style="font-size:250" > '. $min_t .' </text>'."\n";
+	'" fill="black" text_anchor="start" style="font-size:40" > '. $min_t .' </text>'."\n";
 	}
 	
 	$fp.="</g>\n";
