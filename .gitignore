@@ -1,7 +1,6 @@
 __pycache__/
 output_files/
 hotspot/*
-!hotspot/hotspot
 !hotspot/hotspot.config
 !hotspot/grid_thermal_map.pl
 !hotspot/LICENSE

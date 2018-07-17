@@ -7,7 +7,8 @@ s_floorplan = None # the slicing tree, just remember it's a global variable
 
 colormap = {'LAB':'blue','RAM':'orange','DSP':'red'}
 asp_max = 4 # maximum aspect ratio for a single module, minimum is 1/asp_max
-alpha = 1.2 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<alpha<=2
+alpha = 1.3 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<alpha<=2
+temp_am = 310 #ambient temperature for HotSpot
 leaf_IRL = {} #IRL of leaves (functional modules), usually only generate once for given resource/module files
 history_record = {} #stores slicing trees and their cost that are evaluated
 
@@ -19,15 +20,15 @@ def usage():
 def main():
     # Draw empty floorplan
     DrawFloorplan('./output_files/empty_floorplan.svg',[])
-#    mod_loc_list = FloorplaningSA()
-    mod_loc_list = [('aes', (1, 0, 2, 2)), ('jpeg', (3, 0, 4, 4)), ('fir', (1, 4, 2, 2)), ('interp', (3, 4, 2, 2)), ('sobel', (5, 4, 2, 2))]
-    max_temp = RunHotSpot(mod_loc_list, 0)
-    print('max temperature = '+str(max_temp))
+    
+    mod_loc_list = FloorplaningSA()
+
 
 # handle command line arguments by setting global variables    
 def SetGlobalVar(argv):
     global design_name
     os.system('mkdir -p output_files')
+    os.system('chmod 744 ./hotspot/hotspot ./hotspot/grid_thermal_map.pl')
     
     try:
         opts, args = getopt.getopt(argv,'h',['help'])
@@ -325,7 +326,7 @@ def RunHotSpot(module_loc_list, root_power):
     FLPgen(module_loc_list)
     PTRACEgen(module_list, root_power)
     
-    os.system('cd hotspot && ./hotspot -c hotspot.config -f '+design_name+'.flp -p '+design_name+'.ptrace -steady_file '+design_name+'.steady -model_type grid -grid_steady_file '+design_name+'.grid.steady')
+    os.system('cd hotspot && ./hotspot -c hotspot.config -f '+design_name+'.flp -p '+design_name+'.ptrace -steady_file '+design_name+'.steady -model_type grid -grid_steady_file '+design_name+'.grid.steady > /dev/null 2>%1')
     
     thermal_map = open('./hotspot/'+design_name+'.grid.steady','r')
     temperature_str = re.findall(r'\d{3}\.\d{2}', thermal_map.read() )
@@ -344,9 +345,9 @@ def FloorplaningSA():
     def accept_prob(old_cost, new_cost, T):
         return numpy.exp( (old_cost-new_cost)/T )
         
-    # cost function
-    def cost_func(area):
-        cost = area/(WIDTH*HEIGHT)
+    # cost function, area_ex - area exceeds WIDTH*HEIGHT, temp_max - max temperature(in Kelvin)
+    def cost_func(area_ex,temp_max):
+        cost = (temp_max - temp_am) * ( 5*area_ex/(WIDTH*HEIGHT) + 0.1)
         return cost
     
     # calculate IRL of root node
@@ -363,23 +364,36 @@ def FloorplaningSA():
         
         # slicing tree not evaluated before
         EvaluateNode(0)
-        useful_floorplan = list(filter(lambda p: (p[0][0]+p[0][2])<WIDTH and (p[0][1]+p[0][3])<HEIGHT, s_floorplan.slicing_tree[0].IRL))
-        root_area = [ a[0][2]*a[0][3] for a in s_floorplan.slicing_tree[0].IRL]
+        ex_root_area = [] # area exceeds WIDTH*HEIGHT            
         
-        if root_area:
-            root_area_min = min(root_area)
-            cost = cost_func(root_area_min)
+        if s_floorplan.slicing_tree[0].IRL:
+            cost_list = []
+            for IR in s_floorplan.slicing_tree[0].IRL:
+                if (IR[0][0]+IR[0][2] > WIDTH) and (IR[0][1]+IR[0][3] <= HEIGHT):
+                    area_exceed = IR[0][3] * (IR[0][0]+IR[0][2]-WIDTH)
+                elif (IR[0][0]+IR[0][2] <= WIDTH) and (IR[0][1]+IR[0][3] > HEIGHT):
+                    area_exceed = IR[0][2] * (IR[0][1]+IR[0][3]-HEIGHT)
+                elif (IR[0][0]+IR[0][2] > WIDTH) and (IR[0][1]+IR[0][3] > HEIGHT):
+                    area_exceed = IR[0][2]*IR[0][3] - (WIDTH-IR[0][0])*(HEIGHT-IR[0][1])
+                else:
+                    area_exceed = 0
+                
+                cur_max_temp = RunHotSpot(IR[1], 0)
+                cost_list.append( cost_func(area_exceed, cur_max_temp) )
+                    
+            cost = min(cost_list)
         else:
             cost = 99999
             
-        if useful_floorplan: #if there is floorplan fits the real maximum area
-            real_root_area = [ a[0][2]*a[0][3] for a in useful_floorplan ]
-            real_root_area_min = min(real_root_area)
-            index_best = real_root_area.index(real_root_area_min)
-            real_cost = cost_func(real_root_area_min)
-            if real_cost < best_cost:
-                best_cost = real_cost
-                best_fp = useful_floorplan[index_best]
+        useful_floorplan = list(map(lambda p: (p[0][0]+p[0][2])<=WIDTH and (p[0][1]+p[0][3])<=HEIGHT, s_floorplan.slicing_tree[0].IRL))
+        if 1 in useful_floorplan: #if there is floorplan fits the real maximum area
+            for i in range(len(useful_floorplan)):
+                if useful_floorplan[i] == 1:
+                    real_cost = cost_list[i]
+                    if real_cost < best_cost:
+                        best_cost = real_cost
+                        best_fp = s_floorplan.slicing_tree[0].IRL[i]
+
         
         history_record[cur_polish] = cost
                 
@@ -402,7 +416,7 @@ def FloorplaningSA():
  
     T = 1.0 # temperature
     T_min = 0.05
-    coeff = 0.88
+    coeff = 0.8
     
     print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min))
     
@@ -434,12 +448,13 @@ def FloorplaningSA():
         print('So far, best cost found = '+str(best_cost)+' , best floorplan: '+str(best_fp))
         
     # draw result
-    if best_cost < 0:
+    if best_cost == 99999:
         print('No feasible floorplan found')
     else:
         print('best floorplan: '+str(best_fp))
         modules = best_fp[1]
         DrawFloorplan('./output_files/'+design_name+'_floorplan.svg',modules)
+        DrawThermalMap('./output_files/'+design_name+'_thermal_map.svg',modules, 0)
         
     return modules
 
@@ -496,6 +511,10 @@ def DrawFloorplan(svg_name, modules):
         dr.add(dr.text(mod_name,insert=(initial_x,initial_y+20)))
     
     dr.save()
+    
+def DrawThermalMap(file_name,module_loc_list, root_power):
+    RunHotSpot(module_loc_list, root_power)
+    os.system('cd hotspot && ./grid_thermal_map.pl '+design_name+'.flp '+design_name+'.grid.steady > ../'+file_name)
 
 
 design_name = 'test' #default
