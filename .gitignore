@@ -1,5 +1,6 @@
 __pycache__/
-output_files/
+output_files/*
+!output_files/example/
 hotspot/*
 !hotspot/hotspot.config
 !hotspot/grid_thermal_map.pl

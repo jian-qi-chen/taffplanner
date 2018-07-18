@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """ author: Jianqi Chen """
-import sys, os, svgwrite, random, copy, numpy, getopt, re
+import sys, os, svgwrite, random, copy, numpy, getopt, re, threading
+from queue import Queue
 from SlicingTree import STree
 
 s_floorplan = None # the slicing tree, just remember it's a global variable
@@ -286,13 +287,13 @@ def EvaluateNode(index):
     s_floorplan.slicing_tree[index].IRL = IRL
 
 # generate floorplan file for thermal simulator HotSpot
-# module_loc_list = [(mod_name1,(x,y,w,h)),(mod_name2..)..]
-def FLPgen(module_loc_list):
+# module_loc_list = [(mod_name1,(x,y,w,h)),(mod_name2..)..], folder is the name of ./hotspot/folder, can be empty string
+def FLPgen(module_loc_list,folder):
     # how long is 1 unit width in IRLs
     cell_width = 0.0001
     cell_height = 0.0001
     
-    flp_file = open('./hotspot/'+design_name+'.flp','w')
+    flp_file = open('./hotspot/'+folder+'/'+design_name+'.flp','w')
     flp_file.write('root\t'+str( WIDTH*cell_width )+'\t'+str( HEIGHT*cell_height )+'\t0\t0\n')
     
     for mod in module_loc_list:
@@ -306,8 +307,8 @@ def FLPgen(module_loc_list):
 
 # generate power trace file for thermal simulator HotSpot
 # mod_list should have the same format of the module_list in file test.module
-def PTRACEgen(mod_list, root_power):
-    ptrace_file = open('./hotspot/'+design_name+'.ptrace','w')
+def PTRACEgen(mod_list, root_power,folder):
+    ptrace_file = open('./hotspot/'+folder+'/'+design_name+'.ptrace','w')
     
     name = 'root' #first line
     power = str(root_power/1000) #second line
@@ -321,14 +322,16 @@ def PTRACEgen(mod_list, root_power):
     ptrace_file.close()
     
 # generate flp and ptrace file from module_list and IRL. root_power is static power of the whole floorplanning area(unit: mW)
-# run HotSpot and get thermal map file [design_name].grid.steady as output, also return the highest temperature(unit: Kelvin)
-def RunHotSpot(module_loc_list, root_power):
-    FLPgen(module_loc_list)
-    PTRACEgen(module_list, root_power)
+# run HotSpot and get thermal map file [design_name].grid.steady as output
+def RunHotSpot(module_loc_list, root_power, folder):
+    FLPgen(module_loc_list, folder)
+    PTRACEgen(module_list, root_power, folder)
     
-    os.system('cd hotspot && ./hotspot -c hotspot.config -f '+design_name+'.flp -p '+design_name+'.ptrace -steady_file '+design_name+'.steady -model_type grid -grid_steady_file '+design_name+'.grid.steady > /dev/null 2>%1')
-    
-    thermal_map = open('./hotspot/'+design_name+'.grid.steady','r')
+    os.system('cd hotspot && ./hotspot -c hotspot.config -f ./'+folder+'/'+design_name+'.flp -p ./'+folder+'/'+design_name+'.ptrace -steady_file ./'+folder+'/'+design_name+'.steady -model_type grid -grid_steady_file ./'+folder+'/'+design_name+'.grid.steady > /dev/null 2>%1')
+
+# read [design_name].grid.steady and return the highest temperature(unit: Kelvin)    
+def ReadTempMax(folder):
+    thermal_map = open('./hotspot/'+folder+'/'+design_name+'.grid.steady','r')
     temperature_str = re.findall(r'\d{3}\.\d{2}', thermal_map.read() )
     thermal_map.close()
     temperature = map(float, temperature_str)
@@ -347,7 +350,7 @@ def FloorplaningSA():
         
     # cost function, area_ex - area exceeds WIDTH*HEIGHT, temp_max - max temperature(in Kelvin)
     def cost_func(area_ex,temp_max):
-        cost = (temp_max - temp_am) * ( 5*area_ex/(WIDTH*HEIGHT) + 0.1)
+        cost = (temp_max - temp_am) * ( 30*area_ex/(WIDTH*HEIGHT) + 1)
         return cost
     
     # calculate IRL of root node
@@ -363,10 +366,12 @@ def FloorplaningSA():
             return history_record[cur_polish]
         
         # slicing tree not evaluated before
-        EvaluateNode(0)
-        ex_root_area = [] # area exceeds WIDTH*HEIGHT            
+        EvaluateNode(0)           
         
         if s_floorplan.slicing_tree[0].IRL:
+            ex_root_area = [] # area exceeds WIDTH*HEIGHT 
+            thread_list = [] # mutithreading for RunHotSpot
+            temp_max_list = [] # maximal temperature from HotSpot
             cost_list = []
             for IR in s_floorplan.slicing_tree[0].IRL:
                 if (IR[0][0]+IR[0][2] > WIDTH) and (IR[0][1]+IR[0][3] <= HEIGHT):
@@ -377,8 +382,27 @@ def FloorplaningSA():
                     area_exceed = IR[0][2]*IR[0][3] - (WIDTH-IR[0][0])*(HEIGHT-IR[0][1])
                 else:
                     area_exceed = 0
+                    
+                ex_root_area.append(area_exceed)
+                    
+                cur_index = s_floorplan.slicing_tree[0].IRL.index(IR)
+                os.system('mkdir -p ./hotspot/'+str(cur_index))
+                t = threading.Thread( target = RunHotSpot, args = (IR[1],0,str(cur_index)) )
+                thread_list.append(t)
                 
-                cur_max_temp = RunHotSpot(IR[1], 0)
+            for thread in thread_list:
+                thread.start()
+                
+            for thread in thread_list:
+                ret_val = thread.join()
+            
+            for i in range(len(thread_list)):
+                t_max = ReadTempMax(str(i))
+                temp_max_list.append(t_max)
+            
+            for i in range(len(temp_max_list)):
+                cur_max_temp = temp_max_list[i]
+                area_exceed = ex_root_area[i]
                 cost_list.append( cost_func(area_exceed, cur_max_temp) )
                     
             cost = min(cost_list)
@@ -414,16 +438,16 @@ def FloorplaningSA():
     best_cost = 99999
     best_fp = ()  
  
-    T = 1.0 # temperature
-    T_min = 0.05
-    coeff = 0.8
+    T = 0.7 # temperature
+    T_min = 0.01
+    coeff = 0.7
     
     print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min))
     
     old_cost = new_floorplan()
     
     while T > T_min:
-        for i in range(25):
+        for i in range(15):
             s_floorplan.ClearIRL()
             tmp_tree = copy.deepcopy( s_floorplan.slicing_tree )
             
@@ -444,7 +468,7 @@ def FloorplaningSA():
                 s_floorplan.slicing_tree = copy.deepcopy( tmp_tree ) #recover the original tree
                 
         T = T*coeff
-        print('25 floorplan evaluated, T = '+str(T))
+        print('20 floorplan evaluated, T = '+str(T))
         print('So far, best cost found = '+str(best_cost)+' , best floorplan: '+str(best_fp))
         
     # draw result
@@ -513,7 +537,7 @@ def DrawFloorplan(svg_name, modules):
     dr.save()
     
 def DrawThermalMap(file_name,module_loc_list, root_power):
-    RunHotSpot(module_loc_list, root_power)
+    RunHotSpot(module_loc_list, root_power, '')
     os.system('cd hotspot && ./grid_thermal_map.pl '+design_name+'.flp '+design_name+'.grid.steady > ../'+file_name)
 
 
