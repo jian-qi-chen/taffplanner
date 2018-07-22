@@ -5,3 +5,5 @@ hotspot/*
 !hotspot/hotspot.config
 !hotspot/grid_thermal_map.pl
 !hotspot/LICENSE
+realcase.res
+realcase.module

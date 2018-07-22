@@ -19,9 +19,14 @@ def usage():
     print("design_name = 'test' by default")
 
 def main():
+    # Output file
     # Draw empty floorplan
-    DrawFloorplan('./output_files/empty_floorplan.svg',[])
+#    DrawFloorplan('./output_files/empty_floorplan.svg',[])
     
+    # set alpha value
+    PreEstimate()
+    
+    # floorplanning using simulated annealing
     mod_loc_list = FloorplaningSA()
 
 
@@ -50,6 +55,37 @@ def SetGlobalVar(argv):
         sys.exit(2)
     elif len(args) == 1:
         design_name = args[0]
+        
+def PreEstimate():
+    global alpha
+    cell_type = list( map(lambda p: p[0],res_cells) )
+    usage_ratio = []
+    
+    for res in resource:
+        count_a = cell_type.count(res) #number of available resources
+        count_n = 0 #number of resources needed
+        
+        for mod in module_list:
+            count_n += module_list[mod][0][res]
+            
+        ratio_u = count_n/count_a
+        usage_ratio.append(ratio_u)
+        
+    key_ratio = max(usage_ratio)
+    if key_ratio > 0.88:
+        print('Not enough FPGA resources')
+        sys.exit(0)
+    elif key_ratio > 0.8:
+        alpha = 1.3
+    elif key_ratio > 0.6:
+        alpha = 1.23
+    elif key_ratio > 0.45:
+        alpha = 1.1
+    elif key_ratio > 0.3:
+        alpha = 1.05
+    else:
+        alpha = 1
+        
         
 # check whether the cell is inside the rectangle
 # (cx,cy): coordinate of the cell, every cell's (x,y) actually represents 4 cells
@@ -438,8 +474,8 @@ def FloorplaningSA():
     best_cost = 99999
     best_fp = ()  
  
-    T = 0.7 # temperature
-    T_min = 0.01
+    T = 0.3 # temperature
+    T_min = 0.003
     coeff = 0.7
     
     print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min))
