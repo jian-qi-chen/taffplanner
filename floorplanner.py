@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """ author: Jianqi Chen """
-import sys, os, svgwrite, random, copy, numpy, getopt, re, threading
+import sys, os, svgwrite, random, copy, numpy, getopt, re, threading, multiprocessing, json, datetime
 from queue import Queue
 from SlicingTree import STree
 
 s_floorplan = None # the slicing tree, just remember it's a global variable
 
+HOTSPOT_PROCESS_MAX = 5
 colormap = {'LAB':'blue','RAM':'orange','DSP':'red'}
 asp_max = 4 # maximum aspect ratio for a single module, minimum is 1/asp_max
 alpha = 1.3 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<alpha<=2
@@ -19,15 +20,19 @@ def usage():
     print("design_name = 'test' by default")
 
 def main():
+    print('Starting at '+str( datetime.datetime.now() ))
     # Output file
+    
     # Draw empty floorplan
-#    DrawFloorplan('./output_files/empty_floorplan.svg',[])
+    DrawFloorplan('./output_files/empty_floorplan.svg',[])
     
     # set alpha value
     PreEstimate()
     
     # floorplanning using simulated annealing
     mod_loc_list = FloorplaningSA()
+    
+    print('Finishing at '+str( datetime.datetime.now() ))
 
 
 # handle command line arguments by setting global variables    
@@ -216,13 +221,43 @@ def SingleIRLGen(x,y,mod_res):
 # IRL belongs to {r=(x,y,w,h)|x>0,y>0,x+w<alpha*WIDTH,y+h<alpha*HEIGHT}
 # mod_res is a dict of resource required e.g. {'lAB':12,'RAM':1}
 # store the IRL in a list
-def ModuleIRLGen(mod_res):
+def ModuleIRLGen(mod_res, mod_name):
     IRL = []
     for x in range(int(alpha*WIDTH)):
         for y in range(int(alpha*HEIGHT)):
             IRL += SingleIRLGen(x,y,mod_res)
     
+    if not os.path.isdir('./output_files/json'):
+        os.system('mkdir ./output_files/json')
+             
+    irl_dict = {mod_name: IRL}
+    with open('./output_files/json/'+mod_name+'_IRL','w') as json_file:
+        json.dump(irl_dict, json_file) 
+
     return IRL
+
+# Generate all IRL for leaves of the slicing tree, using multiprocessing
+def AllLeavesIRLGen():
+    global leaf_IRL
+    mod_names = list(module_list) 
+    os.system('mkdir -p ./output_files/json')
+    
+    print('Generating irreducible realization list for all modules')
+    process_list = []
+    for mod_n in mod_names:
+        t = multiprocessing.Process( target = ModuleIRLGen, args = (module_list[mod_n][0], mod_n) )
+        process_list.append(t)
+        
+    for process in process_list:
+        process.start()
+                
+    for process in process_list:
+        process.join()
+        
+    for mod_n in mod_names:
+        with open('./output_files/json/'+mod_n+'_IRL','r') as f:
+            new_IRL = json.load(f)
+        leaf_IRL.update(new_IRL)
 
 # get IRL for 'V' node(vertical slicing), given (x,y), IRL of left/right child
 # returned list:  [(IRL of the v node, rectangles of each module which is a descendant of the v node)]
@@ -298,8 +333,9 @@ def EvaluateNode(index):
         if mod_name in leaf_IRL: #IRL already calculated
             IRL_tmp = leaf_IRL[mod_name]
         else: #leaf_IRL does not have the IRL
-            IRL_tmp = ModuleIRLGen(mod_res)
-            leaf_IRL[mod_name] = IRL_tmp
+            leaf_IRL[mod_name] = ModuleIRLGen(mod_res, mod_name)
+            IRL_tmp = leaf_IRL[mod_name]
+            
 
         s_floorplan.slicing_tree[index].IRL = [ (x,[(mod_name,x)]) for x in IRL_tmp]
         return
@@ -360,10 +396,13 @@ def PTRACEgen(mod_list, root_power,folder):
 # generate flp and ptrace file from module_list and IRL. root_power is static power of the whole floorplanning area(unit: mW)
 # run HotSpot and get thermal map file [design_name].grid.steady as output
 def RunHotSpot(module_loc_list, root_power, folder):
+    global sema_hotspot
+    sema_hotspot.acquire()
     FLPgen(module_loc_list, folder)
     PTRACEgen(module_list, root_power, folder)
     
     os.system('cd hotspot && ./hotspot -c hotspot.config -f ./'+folder+'/'+design_name+'.flp -p ./'+folder+'/'+design_name+'.ptrace -steady_file ./'+folder+'/'+design_name+'.steady -model_type grid -grid_steady_file ./'+folder+'/'+design_name+'.grid.steady > /dev/null 2>%1')
+    sema_hotspot.release()
 
 # read [design_name].grid.steady and return the highest temperature(unit: Kelvin)    
 def ReadTempMax(folder):
@@ -386,13 +425,14 @@ def FloorplaningSA():
         
     # cost function, area_ex - area exceeds WIDTH*HEIGHT, temp_max - max temperature(in Kelvin)
     def cost_func(area_ex,temp_max):
-        cost = (temp_max - temp_am) * ( 30*area_ex/(WIDTH*HEIGHT) + 1)
+        cost = (temp_max - temp_am) * ( 0.2*area_ex/(WIDTH*HEIGHT) + 1)
         return cost
     
     # calculate IRL of root node
     def new_floorplan():
         global s_floorplan
         global history_record
+        nonlocal max_tp
         nonlocal best_cost
         nonlocal best_fp
         
@@ -403,6 +443,8 @@ def FloorplaningSA():
         
         # slicing tree not evaluated before
         EvaluateNode(0)           
+        
+        useful_floorplan = list(map(lambda p: (p[0][0]+p[0][2])<=WIDTH and (p[0][1]+p[0][3])<=HEIGHT, s_floorplan.slicing_tree[0].IRL))
         
         if s_floorplan.slicing_tree[0].IRL:
             ex_root_area = [] # area exceeds WIDTH*HEIGHT 
@@ -423,18 +465,27 @@ def FloorplaningSA():
                     
                 cur_index = s_floorplan.slicing_tree[0].IRL.index(IR)
                 os.system('mkdir -p ./hotspot/'+str(cur_index))
-                t = threading.Thread( target = RunHotSpot, args = (IR[1],0,str(cur_index)) )
-                thread_list.append(t)
-                
+                if area_exceed == 0:
+                    t = threading.Thread( target = RunHotSpot, args = (IR[1],0,str(cur_index)) )
+                    thread_list.append(t)
+              
             for thread in thread_list:
                 thread.start()
                 
             for thread in thread_list:
-                ret_val = thread.join()
+                thread.join()
             
-            for i in range(len(thread_list)):
-                t_max = ReadTempMax(str(i))
-                temp_max_list.append(t_max)
+            for i in range(len(useful_floorplan)):
+                if useful_floorplan[i] == True:
+                    t_max = ReadTempMax(str(i))
+                    if t_max > max_tp:
+                        max_tp = t_max
+                    temp_max_list.append(t_max)
+                else:
+                    if max_tp == 0:
+                        temp_max_list.append(315)
+                    else:
+                        temp_max_list.append(max_tp)
             
             for i in range(len(temp_max_list)):
                 cur_max_temp = temp_max_list[i]
@@ -443,38 +494,37 @@ def FloorplaningSA():
                     
             cost = min(cost_list)
         else:
-            cost = 99999
+            cost = 999
             
-        useful_floorplan = list(map(lambda p: (p[0][0]+p[0][2])<=WIDTH and (p[0][1]+p[0][3])<=HEIGHT, s_floorplan.slicing_tree[0].IRL))
         if 1 in useful_floorplan: #if there is floorplan fits the real maximum area
-            for i in range(len(useful_floorplan)):
-                if useful_floorplan[i] == 1:
+            for i, useful in enumerate(useful_floorplan):
+                if useful == True:
                     real_cost = cost_list[i]
                     if real_cost < best_cost:
                         best_cost = real_cost
                         best_fp = s_floorplan.slicing_tree[0].IRL[i]
 
-        
         history_record[cur_polish] = cost
                 
         return cost
 
+
     mod_names = list(module_list)    
     # generate IRL for leaves (modules)
-    for mod_n in mod_names:
-        leaf_IRL[mod_n] = ModuleIRLGen(module_list[mod_n][0])
-    
+    AllLeavesIRLGen()
+        
     s_floorplan = STree(mod_names) #ramdom slicing tree, nodes have (t,p,l,r), no (x,y,w,h)
     
     print(s_floorplan)#for debug
     polish_exp = ' '.join( s_floorplan.Polish() )
     print('0.Polish Expression: '+polish_exp)
     
+    max_tp = 0
  #   s_floorplan.M3()
-    best_cost = 99999
+    best_cost = 999
     best_fp = ()  
  
-    T = 0.3 # temperature
+    T = 0.7 # temperature
     T_min = 0.003
     coeff = 0.7
     
@@ -508,8 +558,9 @@ def FloorplaningSA():
         print('So far, best cost found = '+str(best_cost)+' , best floorplan: '+str(best_fp))
         
     # draw result
-    if best_cost == 99999:
+    if best_cost == 999:
         print('No feasible floorplan found')
+        return
     else:
         print('best floorplan: '+str(best_fp))
         modules = best_fp[1]
@@ -586,6 +637,8 @@ resource_file = "./"+ design_name +".res"
 module_file = "./"+ design_name +".module"
 exec(open(resource_file).read())
 exec(open(module_file).read())
+
+sema_hotspot = threading.Semaphore(value = HOTSPOT_PROCESS_MAX )
 
 if __name__ == "__main__":
     main()
