@@ -13,6 +13,7 @@ alpha = 1.3 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alph
 temp_am = 310 #ambient temperature for HotSpot
 leaf_IRL = {} #IRL of leaves (functional modules), usually only generate once for given resource/module files
 history_record = {} #stores slicing trees and their cost that are evaluated
+final_result = None #[max_temperature,[(mod_name1,[x,y,w,h]),(mod_name2,[x,y,w,h])...]]
 
 def usage():
     print("To run the program for [design_name], [design_name].module and [design_name].res should be provided. Then enter:")
@@ -419,6 +420,7 @@ def FloorplaningSA():
     global s_floorplan
     global leaf_IRL
     global history_record
+    global final_result
     # acceptance probability
     def accept_prob(old_cost, new_cost, T):
         return numpy.exp( (old_cost-new_cost)/T )
@@ -502,6 +504,7 @@ def FloorplaningSA():
                     real_cost = cost_list[i]
                     if real_cost < best_cost:
                         best_cost = real_cost
+                        best_temp_max = temp_max_list[i]
                         best_fp = s_floorplan.slicing_tree[0].IRL[i]
 
         history_record[cur_polish] = cost
@@ -522,10 +525,11 @@ def FloorplaningSA():
     max_tp = 0
  #   s_floorplan.M3()
     best_cost = 999
+    best_temp_max = temp_am
     best_fp = ()  
  
     T = 0.7 # temperature
-    T_min = 0.003
+    T_min = 0.007
     coeff = 0.7
     
     print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min))
@@ -560,10 +564,15 @@ def FloorplaningSA():
     # draw result
     if best_cost == 999:
         print('No feasible floorplan found')
+        with open('./output_files/json/final_result','w') as json_file:
+            json.dump(final_result, json_file) 
         return
     else:
         print('best floorplan: '+str(best_fp))
         modules = best_fp[1]
+        final_result = [best_temp_max, modules]
+        with open('./output_files/json/final_result','w') as json_file:
+            json.dump(final_result, json_file) 
         DrawFloorplan('./output_files/'+design_name+'_floorplan.svg',modules)
         DrawThermalMap('./output_files/'+design_name+'_thermal_map.svg',modules, 0)
         
