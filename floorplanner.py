@@ -437,6 +437,7 @@ def FloorplaningSA():
         nonlocal max_tp
         nonlocal best_cost
         nonlocal best_fp
+        nonlocal best_temp_max
         
         # if the slicing tree is evaluated before
         cur_polish = ' '.join( s_floorplan.Polish() )
@@ -528,8 +529,8 @@ def FloorplaningSA():
     best_temp_max = temp_am
     best_fp = ()  
  
-    T = 0.7 # temperature
-    T_min = 0.007
+    T = 1.0 # temperature
+    T_min = 0.01
     coeff = 0.7
     
     print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min))
