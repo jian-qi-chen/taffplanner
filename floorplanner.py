@@ -6,7 +6,7 @@ from SlicingTree import STree
 
 s_floorplan = None # the slicing tree, just remember it's a global variable
 
-HOTSPOT_PROCESS_MAX = 5
+PROCESS_MAX = 5 # Maximal number of processes for RunHotSpot() and ModuleIRLGen()
 colormap = {'LAB':'blue','RAM':'orange','DSP':'red'}
 asp_max = 4 # maximum aspect ratio for a single module, minimum is 1/asp_max
 alpha = 1.3 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<alpha<=2
@@ -223,7 +223,9 @@ def SingleIRLGen(x,y,mod_res):
 # mod_res is a dict of resource required e.g. {'lAB':12,'RAM':1}
 # store the IRL in a list
 def ModuleIRLGen(mod_res, mod_name):
+    sema_irlgen.acquire()
     IRL = []
+
     for x in range(int(alpha*WIDTH)):
         for y in range(int(alpha*HEIGHT)):
             IRL += SingleIRLGen(x,y,mod_res)
@@ -234,7 +236,8 @@ def ModuleIRLGen(mod_res, mod_name):
     irl_dict = {mod_name: IRL}
     with open('./output_files/json/'+mod_name+'_IRL','w') as json_file:
         json.dump(irl_dict, json_file) 
-
+        
+    sema_irlgen.release()
     return IRL
 
 # Generate all IRL for leaves of the slicing tree, using multiprocessing
@@ -648,7 +651,8 @@ module_file = "./"+ design_name +".module"
 exec(open(resource_file).read())
 exec(open(module_file).read())
 
-sema_hotspot = threading.Semaphore(value = HOTSPOT_PROCESS_MAX )
+sema_hotspot = threading.Semaphore(value = PROCESS_MAX )
+sema_irlgen = multiprocessing.Semaphore(PROCESS_MAX)
 
 if __name__ == "__main__":
     main()
