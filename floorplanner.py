@@ -15,6 +15,11 @@ leaf_IRL = {} #IRL of leaves (functional modules), usually only generate once fo
 history_record = {} #stores slicing trees and their cost that are evaluated
 final_result = None #[max_temperature,[(mod_name1,[x,y,w,h]),(mod_name2,[x,y,w,h])...]]
 
+# coefficients in cost function: cost = ( aaa*temp_max + bbb*tot_ap + ccc*tot_wl ) * ( 0.2*area_ex/(WIDTH*HEIGHT) + 1)
+aaa = 2#0.2
+bbb = 0.1
+ccc = 0.0005#0.002
+
 def usage():
     print("To run the program for [design_name], [design_name].module and [design_name].res should be provided. Then enter:")
     print("\t./floorplanner.py [design_name]")
@@ -22,7 +27,6 @@ def usage():
 
 def main():
     print('Starting at '+str( datetime.datetime.now() ))
-    # Output file
     
     # Draw empty floorplan
     DrawFloorplan('./output_files/empty_floorplan.svg',[])
@@ -38,12 +42,15 @@ def main():
 
 # handle command line arguments by setting global variables    
 def SetGlobalVar(argv):
-    global design_name
+    global design_name, beta, gamma
     os.system('mkdir -p output_files')
     os.system('chmod 744 ./hotspot/hotspot ./hotspot/grid_thermal_map.pl')
+    # Output file
+    with open('./output_files/json/final_result','w') as json_file:
+            json.dump(final_result, json_file) 
     
     try:
-        opts, args = getopt.getopt(argv,'h',['help'])
+        opts, args = getopt.getopt(argv,'h',['help','aaa','bbb','ccc'])
     except getopt.GetopError:
         usage()
         sys.exit(1)
@@ -52,6 +59,12 @@ def SetGlobalVar(argv):
         if opt in ('-h','--help'):
             usage()
             sys.exit(0)
+        elif opt in ('--aaa'):
+            aaa = float(arg)
+        elif opt in ('--bbb'):
+            bbb = float(arg)
+        elif opt in ('--ccc'):
+            ccc = float(arg)
         else:
             usage()
             sys.exit(2)
@@ -78,17 +91,17 @@ def PreEstimate():
         usage_ratio.append(ratio_u)
         
     key_ratio = max(usage_ratio)
-    if key_ratio > 0.88:
+    if key_ratio > 0.86:
         print('Not enough FPGA resources')
         sys.exit(0)
     elif key_ratio > 0.8:
-        alpha = 1.3
-    elif key_ratio > 0.6:
-        alpha = 1.23
-    elif key_ratio > 0.45:
-        alpha = 1.1
+        alpha = 1.5
+    elif key_ratio > 0.5:
+        alpha = 1.4
+    elif key_ratio > 0.4:
+        alpha = 1.25
     elif key_ratio > 0.3:
-        alpha = 1.05
+        alpha = 1.1
     else:
         alpha = 1
         
@@ -417,6 +430,33 @@ def ReadTempMax(folder):
     max_temp = max(temperature)
     
     return max_temp
+    
+# given the location of every module[(mod_name,(x,y,w,h)),(..).], return total interconnection wire length = sum( Manhattan distance between block centers)
+def TotalWireLen(module_loc_list):
+    mod_loc_dict = {}
+    # read the list into a dict, and only store the center location
+    for mod_loc in module_loc_list:
+        mod_loc_dict[ mod_loc[0] ] = (mod_loc[1][0]+mod_loc[1][2]/2, mod_loc[1][2]+mod_loc[1][3]/2)
+        
+    wl_sum = 0
+    for mod in module_list: #module_list is the global variable in .module file_name
+        center1 = mod_loc_dict[mod]
+        for other_mod in module_list[mod][2]:
+            center2 = mod_loc_dict[other_mod]
+            wire_num = module_list[mod][2][other_mod]
+            wl_sum += wire_num * ( abs(center1[0]-center2[0]) + abs(center1[1]-center2[1]) )
+            
+    wl_sum = wl_sum/2 #actually calculated twice above
+    return wl_sum
+    
+# given the location of every module[(mod_name,(x,y,w,h)),(..).], return aspect ratio sum = sum( longer side length/shorter side length of all blocks), this a metric for internal wire length
+def RatioSum(module_loc_list):
+    r_sum = 0
+    for mod_loc in module_loc_list:
+        ap_ratio = max( [ mod_loc[1][2]/mod_loc[1][3], mod_loc[1][3]/mod_loc[1][2] ] )
+        r_sum += ap_ratio
+        
+    return r_sum
 
 # floorplanning algorithm based on Simulated Annealing
 def FloorplaningSA():
@@ -428,9 +468,9 @@ def FloorplaningSA():
     def accept_prob(old_cost, new_cost, T):
         return numpy.exp( (old_cost-new_cost)/T )
         
-    # cost function, area_ex - area exceeds WIDTH*HEIGHT, temp_max - max temperature(in Kelvin)
-    def cost_func(area_ex,temp_max):
-        cost = (temp_max - temp_am) * ( 0.2*area_ex/(WIDTH*HEIGHT) + 1)
+    # cost function, area_ex - area exceeds WIDTH*HEIGHT, temp_max - max temperature(in Kelvin), tot_wl - total external interconnection wire length, tot_ap - aspect ratio sum of all modules
+    def cost_func(area_ex, temp_max, tot_ap, tot_wl):
+        cost = cost = ( aaa*temp_max + bbb*tot_ap + ccc*tot_wl ) * ( 0.2*area_ex/(WIDTH*HEIGHT) + 1)
         return cost
     
     # calculate IRL of root node
@@ -456,6 +496,8 @@ def FloorplaningSA():
             ex_root_area = [] # area exceeds WIDTH*HEIGHT 
             thread_list = [] # mutithreading for RunHotSpot
             temp_max_list = [] # maximal temperature from HotSpot
+            total_ratio = [] # aspect ratio rum of all modules
+            total_wirelen = [] # total length of external interconnection wire between modules
             cost_list = []
             for IR in s_floorplan.slicing_tree[0].IRL:
                 if (IR[0][0]+IR[0][2] > WIDTH) and (IR[0][1]+IR[0][3] <= HEIGHT):
@@ -468,6 +510,8 @@ def FloorplaningSA():
                     area_exceed = 0
                     
                 ex_root_area.append(area_exceed)
+                total_wirelen.append( TotalWireLen(IR[1]) )
+                total_ratio.append( RatioSum(IR[1]) )
                     
                 cur_index = s_floorplan.slicing_tree[0].IRL.index(IR)
                 os.system('mkdir -p ./hotspot/'+str(cur_index))
@@ -496,7 +540,9 @@ def FloorplaningSA():
             for i in range(len(temp_max_list)):
                 cur_max_temp = temp_max_list[i]
                 area_exceed = ex_root_area[i]
-                cost_list.append( cost_func(area_exceed, cur_max_temp) )
+                ratio_sum = total_ratio[i]
+                wire_length = total_wirelen[i]
+                cost_list.append( cost_func(area_exceed, cur_max_temp, ratio_sum, wire_length) )
                     
             cost = min(cost_list)
         else:
@@ -533,15 +579,15 @@ def FloorplaningSA():
     best_fp = ()  
  
     T = 1.0 # temperature
-    T_min = 0.01
-    coeff = 0.7
+    T_min = 0.005
+    coeff = 0.73
     
     print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min))
     
     old_cost = new_floorplan()
     
     while T > T_min:
-        for i in range(15):
+        for i in range(20):
             s_floorplan.ClearIRL()
             tmp_tree = copy.deepcopy( s_floorplan.slicing_tree )
             
