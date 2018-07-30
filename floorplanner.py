@@ -8,7 +8,7 @@ s_floorplan = None # the slicing tree, just remember it's a global variable
 
 PROCESS_MAX = 5 # Maximal number of processes for RunHotSpot() and ModuleIRLGen()
 colormap = {'LAB':'blue','RAM':'orange','DSP':'red'}
-asp_max = 4 # maximum aspect ratio for a single module, minimum is 1/asp_max
+asp_max = 3.5 # maximum aspect ratio for a single module, minimum is 1/asp_max
 alpha = 1.3 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<alpha<=2
 temp_am = 310 #ambient temperature for HotSpot
 leaf_IRL = {} #IRL of leaves (functional modules), usually only generate once for given resource/module files
@@ -148,31 +148,31 @@ def SingleIRLGen(x,y,mod_res):
             cell_h = resource[res][1] #cell height
             
             count = 0
-            for cell in res_cells:
-                # check resource type
-                if cell[0] == res:
-                    count += CellInRect(cell[1],cell[2],cell_w,cell_h,x,y,s_width,s_width)
+            res_cells_useful = filter(lambda p: p[0] == res and p[1]>=x and p[2]>=y, res_cells)
+            for cell in res_cells_useful:
+                count += CellInRect(cell[1],cell[2],cell_w,cell_h,x,y,s_width,s_width)
             
             if count >= mod_res[res]:
                 check_list[i] = True
                 i += 1
             else:
                 break
-            
+  
         if False not in check_list:
             IRL.append( (x,y,s_width,s_width) )
+            rm_flg = True
             break
         elif (x + s_width) <= v_WIDTH and (y + s_width) <= v_HEIGHT:
             s_width += 1
         else:
-            return IRL
+            break
 
     #searching for a long rectangle (width>height)
     l_height = s_width - 1
-    l_width = s_width + 1
+    l_width = s_width
     
     while l_height >= 1:
-        while l_width/l_height < asp_max:
+        while l_width/l_height < asp_max and (x + l_width) <= v_WIDTH:
             check_list = [False for i in range(len(mod_res))]
             i = 0
             for res in mod_res:
@@ -180,30 +180,37 @@ def SingleIRLGen(x,y,mod_res):
                 cell_h = resource[res][1] #cell height
                 
                 count = 0
-                for cell in res_cells:
-                    # check resource type
-                    if cell[0] == res:
-                        count += CellInRect(cell[1],cell[2],cell_w,cell_h,x,y,l_width,l_height)
-                
+                res_cells_useful = filter(lambda p: p[0] == res and p[1]>=x and p[2]>=y, res_cells)
+                for cell in res_cells_useful:
+                    count += CellInRect(cell[1],cell[2],cell_w,cell_h,x,y,l_width,l_height)
+
                 if count >= mod_res[res]:
                     check_list[i] = True
+                    i += 1
                 else:
                     break
-                
+   
             if False not in check_list:
+                if rm_flg:
+                    IRL.pop()
                 IRL.append( (x,y,l_width,l_height) )
+                rm_flg = True
                 break
             else:
                 l_width += 1
+                rm_flg = False
+        
+        if (x + l_width) > v_WIDTH:
+            break
                 
         l_height -= 1
         
     #searching for a tall rectangle (width<height)
-    t_height = s_width + 1
+    t_height = s_width
     t_width = s_width - 1
     
     while t_width >= 1:
-        while t_height/t_width < asp_max:
+        while t_height/t_width < asp_max and (y + t_height) <= v_HEIGHT:
             check_list = [False for i in range(len(mod_res))]
             i = 0
             for res in mod_res:
@@ -211,22 +218,29 @@ def SingleIRLGen(x,y,mod_res):
                 cell_h = resource[res][1] #cell height
                 
                 count = 0
-                for cell in res_cells:
-                    # check resource type
-                    if cell[0] == res:
-                        count += CellInRect(cell[1],cell[2],cell_w,cell_h,x,y,t_width,t_height)
+                res_cells_useful = filter(lambda p: p[0] == res and p[1]>=x and p[2]>=y, res_cells)
+                for cell in res_cells_useful:
+                    count += CellInRect(cell[1],cell[2],cell_w,cell_h,x,y,t_width,t_height)
                 
                 if count >= mod_res[res]:
                     check_list[i] = True
+                    i += 1
                 else:
                     break
                 
             if False not in check_list:
+                if rm_flg:
+                    IRL.pop()
                 IRL.append( (x,y,t_width,t_height) )
+                rm_flg = True
                 break
             else:
                 t_height += 1
-                
+                rm_flg = False
+        
+        if (y + t_height) > v_HEIGHT:
+            break
+        
         t_width -= 1
         
     return IRL
@@ -298,7 +312,7 @@ def VGetIRL(x,y,l_IRL, r_IRL):
         for j in range(len(rr_IRL)):
             r_w = rr_IRL[j][0][2]
             r_h = rr_IRL[j][0][3]
-            r_mod_use = rr_IRL[i][1]
+            r_mod_use = rr_IRL[j][1]
             
             w_new = l_w + r_w
             h_new = max(l_h,r_h)
@@ -318,7 +332,7 @@ def HGetIRL(x,y,l_IRL, r_IRL):
         l_w = ll_IRL[i][0][2]
         l_h = ll_IRL[i][0][3]
         l_mod_use = ll_IRL[i][1]
-        if i == 0:
+        if i == len(ll_IRL)-1:
             l_w1 = alpha*WIDTH
         else:
             l_w1 = ll_IRL[i+1][0][2]#upperbound for right child's width
@@ -328,7 +342,7 @@ def HGetIRL(x,y,l_IRL, r_IRL):
         for j in reversed(range(len(rr_IRL))):
             r_w = rr_IRL[j][0][2]
             r_h = rr_IRL[j][0][3]
-            r_mod_use = rr_IRL[i][1]
+            r_mod_use = rr_IRL[j][1]
             
             w_new = max(l_w,r_w)
             h_new = l_h + r_h
@@ -337,6 +351,7 @@ def HGetIRL(x,y,l_IRL, r_IRL):
                 break
             
     return h_IRL
+
 
 # usually input the index of root node when call this function, which is always 0.
 # Then get IRL for all nodes in the slicing tree
