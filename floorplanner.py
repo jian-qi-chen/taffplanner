@@ -595,14 +595,20 @@ def FloorplaningSA():
  
     T = 1.0 # temperature
     T_min = 0.005
-    coeff = 0.73
+    coeff = 0.8
     
-    print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min))
+    print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min)+' or 3 consecutive temperature without cost improvement')
     
     old_cost = new_floorplan()
     
+    max_inner_iter = 20
+    nobetter_t_count = 0
     while T > T_min:
-        for i in range(20):
+        old_best_cost = best_cost
+        inner_iter_count = 0
+        nojump_count = 0
+        while inner_iter_count < max_inner_iter:
+            inner_iter_count += 1
             s_floorplan.ClearIRL()
             tmp_tree = copy.deepcopy( s_floorplan.slicing_tree )
             
@@ -619,12 +625,26 @@ def FloorplaningSA():
             ap = accept_prob(old_cost, new_cost, T)
             if ap > random.random():
                 old_cost = new_cost
+                nojump_count = 0
             else:
                 s_floorplan.slicing_tree = copy.deepcopy( tmp_tree ) #recover the original tree
+                nojump_count += 1
+                if nojump_count >= 3:
+                    break
                 
         T = T*coeff
-        print('20 floorplan evaluated, T = '+str(T))
+        print(inner_iter_count,'floorplan evaluated, T =', T)
         print('So far, best cost found = '+str(best_cost)+' , best floorplan: '+str(best_fp))
+        
+        if best_cost == old_best_cost:
+            nobetter_t_count += 1
+        else:
+            nobetter_t_count =0
+            
+        if nobetter_t_count >= 3 and best_cost != 999:
+            break
+            
+        
         
     # draw result
     if best_cost == 999:
