@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """ author: Jianqi Chen """
-import sys, os, svgwrite, random, copy, numpy, getopt, re, threading, multiprocessing, json, datetime
+import sys, os, svgwrite, random, copy, numpy, getopt, re, threading, multiprocessing, json, datetime, itertools
 from queue import Queue
 from SlicingTree import STree
 
@@ -15,10 +15,15 @@ leaf_IRL = {} #IRL of leaves (functional modules), usually only generate once fo
 history_record = {} #stores slicing trees and their cost that are evaluated
 final_result = None #[max_temperature,[(mod_name1,[x,y,w,h]),(mod_name2,[x,y,w,h])...]]
 
-# coefficients in cost function: cost = ( aaa*temp_max + bbb*tot_ap + ccc*tot_wl ) * ( 0.2*area_ex/(WIDTH*HEIGHT) + 1)
+# coefficients in SA's cost function: cost = ( aaa*temp_max + bbb*tot_ap + ccc*tot_wl ) * ( 0.2*area_ex/(WIDTH*HEIGHT) + 1)
 aaa = 2#0.2
 bbb = 0.1
 ccc = 0.0005#0.002
+
+# coefficients in MCG's cost functional: cost = mcg_alpha*BoundingArea + mcg_beta*sum{sqrt(mod_area_self*mod_area_other)/(dist*(power_density difference + mcg_const))}
+mcg_alpha = 0.97
+mcg_beta = 0.03
+mcg_const = 0.05
 
 def usage():
     print("To run the program for [design_name], [design_name].module and [design_name].res should be provided. Then enter:")
@@ -29,13 +34,16 @@ def main():
     print('Starting at '+str( datetime.datetime.now() ))
     
     # Draw empty floorplan
-    DrawFloorplan('./output_files/empty_floorplan.svg',[])
+#    DrawFloorplan('./output_files/empty_floorplan.svg',[])
     
     # set alpha value
     PreEstimate()
     
     # floorplanning using simulated annealing
-    mod_loc_list = FloorplaningSA()
+#    mod_loc_list = FloorplaningSA()
+
+    # floorplanning using cluster growth
+    FloorplaningMCG()
     
     print('Finishing at '+str( datetime.datetime.now() ))
 
@@ -597,7 +605,7 @@ def FloorplaningSA():
     T_min = 0.005
     coeff = 0.8
     
-    print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min)+' or 3 consecutive temperature without cost improvement')
+    print('Simulated Anealing started. Starting with T = '+str(T)+', will be stopped when T < '+str(T_min)+' or 2 consecutive temperature without cost improvement')
     
     old_cost = new_floorplan()
     
@@ -641,11 +649,9 @@ def FloorplaningSA():
         else:
             nobetter_t_count =0
             
-        if nobetter_t_count >= 3 and best_cost != 999:
+        if nobetter_t_count >= 2 and best_cost != 999:
             break
-            
-        
-        
+                 
     # draw result
     if best_cost == 999:
         print('No feasible floorplan found')
@@ -663,6 +669,167 @@ def FloorplaningSA():
         
     return modules
 
+# check if module1 [x1,y1,w1,h1] overlap with module2 [x2,y2,w2,h2]
+def CheckOverlapMod(module1, module2):
+    x1,y1,w1,h1 = module1
+    x2,y2,w2,h2 = module2
+    
+    if x1 < x2+w2 and x1+w1 > x2 and y1 < y2+h2 and y1+h1 > y2:
+        return True
+    else:
+        return False
+
+# check if new_module [x,y,w,h] overlap with modules in floorplan [['name',[x,y,w,h]],[..],..]
+def CheckOverlap(floorplan, new_module):
+    for mod in floorplan:
+        if CheckOverlapMod(mod[1], new_module):
+            return True
+            
+    return False
+    
+# floorplan format: [['name',[x,y,w,h]],[..],..]
+def BoundingArea(floorplan):
+    max_x = 0
+    max_y = 0
+    for mod in floorplan:
+        right_x = mod[1][0]+mod[1][2]
+        upper_y = mod[1][1]+mod[1][3]
+        if right_x > max_x:
+            max_x = right_x
+        if upper_y > max_y:
+            max_y = upper_y
+            
+    return max_x*max_y
+    
+# Euclidean distance of the centers of two modules, module format:[x,y,w,h]
+def EuclideanDist(module1,module2):
+    center1_x = module1[0] + module1[2]/2
+    center1_y = module1[1] + module1[3]/2
+    center2_x = module2[0] + module2[2]/2
+    center2_y = module2[1] + module2[3]/2
+    
+    Edist = ((center1_x - center2_x)**2 + (center1_y - center2_y)**2 )**0.5
+    return Edist
+    
+# module format: ['name',[x,y,w,h]] 
+def PowerDensity(module):
+    power = module_list[module[0]][1]
+    area = module[1][2]*module[1][3]
+    
+    return power/area
+
+# floorplanning algorithm based on (modified) cluster growth
+def FloorplaningMCG():
+    global alpha, final_result
+    alpha = 1
+    
+    # Cost function when select module locations, module: [x,y,w,h]
+    def cost_func(module):
+        if CheckOverlap(floorplan_mcg, module):
+            cost = 999
+        else:
+            new_floorplan = floorplan_mcg + [['new_module',module]]
+            bound = BoundingArea(new_floorplan)
+            b_area_norm = bound/(WIDTH*HEIGHT) #normalized bounding area
+            power_density = PowerDensity([current_mod_name,module])
+            mod_area_self = module[2]*module[3]
+            
+            second_term_sum = 0
+            for mod in floorplan_mcg:
+                mod_area = mod[1][2] * mod[1][3]
+                dist = EuclideanDist(module,mod[1])
+                other_power_density = PowerDensity(mod)
+                pd_diff = abs(power_density - other_power_density)
+                second_term_sum += (mod_area*mod_area_self)**0.5 /(dist * (pd_diff+mcg_const))
+                
+            cost = mcg_alpha*b_area_norm + mcg_beta*second_term_sum             
+            
+        return cost
+    
+    # first module to place is given as seed
+    def LinearOrdering(first_mod_name):
+        module_order = [first_mod_name]
+        mod_list = list(module_list)
+        gain_list = [0]*len(mod_list)
+        unselected_list = [True]*len(mod_list)
+        
+        selected_index = mod_list.index(module_order[-1])
+        unselected_list[selected_index] = False
+
+        for i,mod in enumerate(mod_list):
+            for other_mod in module_list[mod][2]:
+                gain_list[i] -= module_list[mod][2][other_mod] #new nets
+                       
+        while True in unselected_list:
+            net_dict = module_list[ module_order[-1] ][2]
+            for mod in net_dict:
+                mod_index = mod_list.index(mod)
+                gain_list[mod_index] += net_dict[mod] #nets going to be terminated
+                
+            remaining_mods = list( itertools.compress(mod_list,unselected_list) )
+            remaining_gains = list( itertools.compress(gain_list,unselected_list) )
+            
+            module_order.append( remaining_mods[ remaining_gains.index( max(remaining_gains) ) ] )
+            selected_index = mod_list.index(module_order[-1])
+            unselected_list[selected_index] = False
+        
+        return module_order
+
+
+    # generate IRL for leaves (modules), generate leaf_IRL:{'fir':[[x,y,w,h]..],...}
+    AllLeavesIRLGen()
+    
+    floorplan_list = []
+    max_temp_list = []
+
+    for module_n in list(module_list):
+        module_order = LinearOrdering(module_n)
+        print('order:',module_order)
+        
+        floorplan_mcg = [] # in formant [['name',[x,y,w,h]],[..],..]
+        mcg_success = True
+        
+        for mod_name in module_order:
+            mod_location_list = leaf_IRL[mod_name]
+            current_mod_name = mod_name
+            mod_cost_list = list( map(cost_func,mod_location_list) )
+            min_cost_ind = mod_cost_list.index( min(mod_cost_list) )
+            
+            if min_cost_ind != 999:
+                min_cost_location = mod_location_list[min_cost_ind]
+                floorplan_mcg.append([mod_name,min_cost_location])
+                print(mod_name,'placed')
+            else:
+                mcg_success = False
+                break
+                
+        if mcg_success == True:
+            print('succeed')
+            floorplan_list.append(copy.deepcopy(floorplan_mcg))
+            RunHotSpot(floorplan_mcg, 0, 'mcg')
+            cur_max_temp = ReadTempMax('mcg')
+            max_temp_list.append(cur_max_temp)
+    
+    # draw result
+    if not mcg_success:
+        print('No feasible floorplan found')
+        with open('./output_files/json/final_result','w') as json_file:
+            json.dump(final_result, json_file) 
+        return
+    else:
+        floorplan_mcg = copy.deepcopy( floorplan_list[max_temp_list.index( min(max_temp_list) )] )
+        print('best floorplan:',floorplan_mcg)
+        os.system('mkdir -p ./hotspot/mcg')
+        DrawThermalMap('./output_files/'+design_name+'_thermal_map_mcg.svg',floorplan_mcg, 0)
+        temp_max = ReadTempMax('')
+        final_result = [temp_max, floorplan_mcg]
+        with open('./output_files/json/final_result','w') as json_file:
+            json.dump(final_result, json_file) 
+        DrawFloorplan('./output_files/'+design_name+'_floorplan_mcg.svg',floorplan_mcg)
+        DrawThermalMap('./output_files/'+design_name+'_thermal_map_mcg.svg',floorplan_mcg, 0)
+        
+    return floorplan_mcg
+    
 
 def DrawFloorplan(svg_name, modules):
     global colormap
