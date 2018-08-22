@@ -54,6 +54,9 @@ def SetGlobalVar(argv):
     os.system('mkdir -p output_files')
     os.system('chmod 744 ./hotspot/hotspot ./hotspot/grid_thermal_map.pl')
     # Output file
+    if not os.path.isdir('./output_files/json'):
+        os.system('mkdir ./output_files/json')
+        
     with open('./output_files/json/final_result','w') as json_file:
             json.dump(final_result, json_file) 
     
@@ -726,7 +729,7 @@ def FloorplaningMCG():
     # Cost function when select module locations, module: [x,y,w,h]
     def cost_func(module):
         if CheckOverlap(floorplan_mcg, module):
-            cost = 999
+            cost = float('inf')
         else:
             new_floorplan = floorplan_mcg + [['new_module',module]]
             bound = BoundingArea(new_floorplan)
@@ -775,6 +778,7 @@ def FloorplaningMCG():
         
         return module_order
 
+    os.system('mkdir -p ./hotspot/mcg')
 
     # generate IRL for leaves (modules), generate leaf_IRL:{'fir':[[x,y,w,h]..],...}
     AllLeavesIRLGen()
@@ -795,7 +799,7 @@ def FloorplaningMCG():
             mod_cost_list = list( map(cost_func,mod_location_list) )
             min_cost_ind = mod_cost_list.index( min(mod_cost_list) )
             
-            if min_cost_ind != 999:
+            if min_cost_ind != float('inf'):
                 min_cost_location = mod_location_list[min_cost_ind]
                 floorplan_mcg.append([mod_name,min_cost_location])
                 print(mod_name,'placed')
