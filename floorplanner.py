@@ -9,7 +9,7 @@ s_floorplan = None # the slicing tree, just remember it's a global variable
 PROCESS_MAX = 5 # Maximal number of processes for RunHotSpot() and ModuleIRLGen()
 colormap = {'LAB':'blue','RAM':'orange','DSP':'red'}
 asp_max = 3.5 # maximum aspect ratio for a single module, minimum is 1/asp_max
-alpha = 1.3 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<alpha<=2
+alpha = 1 # for intermediate floorplans, maximum area is (alpha*WIDTH) * (alpha*HEIGHT), 1<=alpha<=2
 temp_am = 310 #ambient temperature for HotSpot
 leaf_IRL = {} #IRL of leaves (functional modules), usually only generate once for given resource/module files
 history_record = {} #stores slicing trees and their cost that are evaluated
@@ -25,32 +25,42 @@ mcg_alpha = 0.97
 mcg_beta = 0.03
 mcg_const = 0.05
 
+# use sa-based floorplanner or mcg-based
+sa_flg = False
+mcg_flg = False
+
 def usage():
     print("To run the program for [design_name], [design_name].module and [design_name].res should be provided. Then enter:")
-    print("\t./floorplanner.py [design_name]")
+    print("\t./floorplanner.py -t [floorplanner_type] [design_name]")
     print("design_name = 'test' by default")
+    print("floorplanner_type can be 'sa' for simulated annealing or 'mcg' for modified cluster growth")
 
 def main():
-    print('Starting at '+str( datetime.datetime.now() ))
+    print('Floorplanning starting at '+str( datetime.datetime.now() ))
     
     # Draw empty floorplan
-#    DrawFloorplan('./output_files/empty_floorplan.svg',[])
+    DrawFloorplan('./output_files/empty_floorplan.svg',[])
     
-    # set alpha value
-    PreEstimate()
+    print ('sa:',sa_flg)
+    print ('mcg:',mcg_flg)
     
-    # floorplanning using simulated annealing
-#    mod_loc_list = FloorplaningSA()
+    if sa_flg:
+        # set alpha value
+        PreEstimate()
+        
+        # floorplanning using simulated annealing
+        mod_loc_list = FloorplaningSA()
 
-    # floorplanning using cluster growth
-    FloorplaningMCG()
+    if mcg_flg:
+        # floorplanning using cluster growth
+        FloorplaningMCG()
     
     print('Finishing at '+str( datetime.datetime.now() ))
 
 
 # handle command line arguments by setting global variables    
 def SetGlobalVar(argv):
-    global design_name, beta, gamma
+    global design_name, aaa, bbb, ccc, mcg_alpha, mcg_beta, mcg_const, sa_flg, mcg_flg, PROCESS_MAX
     os.system('mkdir -p output_files')
     os.system('chmod 744 ./hotspot/hotspot ./hotspot/grid_thermal_map.pl')
     # Output file
@@ -61,21 +71,40 @@ def SetGlobalVar(argv):
             json.dump(final_result, json_file) 
     
     try:
-        opts, args = getopt.getopt(argv,'h',['help','aaa','bbb','ccc'])
-    except getopt.GetopError:
+        opts, args = getopt.getopt(argv,'ht:',['help','sa_a=','sa_b=','sa_c=','mcg_a=','mcg_b=','mcg_c=','type=','process_limit='])
+    except getopt.GetoptError:
         usage()
         sys.exit(1)
         
+    print('opts:',opts)
+    print('args:',args)        
     for opt, arg in opts:
         if opt in ('-h','--help'):
             usage()
             sys.exit(0)
-        elif opt in ('--aaa'):
+        elif opt == '--sa_a':
             aaa = float(arg)
-        elif opt in ('--bbb'):
+        elif opt == '--sa_b':
             bbb = float(arg)
-        elif opt in ('--ccc'):
+        elif opt == '--sa_c':
             ccc = float(arg)
+        elif opt == '--mcg_a':
+            mcg_alpha = float(arg)
+        elif opt == '--mcg_b':
+            mcg_beta = float(arg)
+        elif opt == '--mcg_c':
+            mcg_const = float(arg)
+        elif opt in ('-t','--type'):
+            if arg == 'sa':
+                sa_flg = True
+            elif arg == 'mcg':
+                mcg_flg = True
+            else:
+                usage()
+                sys.exit(2)
+        elif opt == '--process_limit':
+            PROCESS_MAX = int(arg)
+                
         else:
             usage()
             sys.exit(2)
@@ -667,8 +696,8 @@ def FloorplaningSA():
         final_result = [best_temp_max, modules]
         with open('./output_files/json/final_result','w') as json_file:
             json.dump(final_result, json_file) 
-        DrawFloorplan('./output_files/'+design_name+'_floorplan.svg',modules)
-        DrawThermalMap('./output_files/'+design_name+'_thermal_map.svg',modules, 0)
+        DrawFloorplan('./output_files/'+design_name+'_floorplan_sa.svg',modules)
+        DrawThermalMap('./output_files/'+design_name+'_thermal_map_sa.svg',modules, 0)
         
     return modules
 
@@ -830,7 +859,6 @@ def FloorplaningMCG():
         with open('./output_files/json/final_result','w') as json_file:
             json.dump(final_result, json_file) 
         DrawFloorplan('./output_files/'+design_name+'_floorplan_mcg.svg',floorplan_mcg)
-        DrawThermalMap('./output_files/'+design_name+'_thermal_map_mcg.svg',floorplan_mcg, 0)
         
     return floorplan_mcg
     
